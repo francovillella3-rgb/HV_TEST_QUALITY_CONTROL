@@ -1,0 +1,161 @@
+function SESAME_TESTHV()
+%% ================================================================
+%  EVALUACION AUTOMATICA DE CRITERIOS SESAME - HVSR / GEOPSY
+%  VERSION BASADA EXCLUSIVAMENTE EN ARCHIVOS .HV CON GRAFICOS
+% ================================================================
+clc;
+close all force;             % Fuerza el cierre real de todas las figuras ocultas
+graphics_toolkit('gnuplot'); % Cambia a un motor grafico ligero para evitar caidas
+
+fprintf('\n============================================================\n');
+fprintf('       SESAME - EVALUACION AUTOMATICA + VISUALIZACION\n');
+fprintf('============================================================\n');
+
+carpeta = 'D:\Users\Datos\Datos frecuencia\Datos Procesados';
+LW_SECONDS = 50;
+archivo_salida = fullfile(carpeta, 'Resultados_SESAME.csv');
+carpeta_graficos = fullfile(carpeta, 'Graficos_SESAME');
+
+addpath(carpeta);
+
+if ~exist(carpeta_graficos, 'dir'), mkdir(carpeta_graficos); end
+fprintf('\nLongitud de ventana utilizada: %.2f s\n', LW_SECONDS);
+
+archivos = dir(fullfile(carpeta, '*.hv'));
+if isempty(archivos), error('No se encontraron archivos .hv.'); end
+fprintf('Archivos .hv encontrados: %d\n\n', length(archivos));
+resultados = {};
+
+for i = 1:length(archivos)
+    nombre_hv = archivos(i).name;
+    ruta_hv = fullfile(carpeta, nombre_hv);
+    fprintf('------------------------------------------------------------\n');
+    fprintf('Procesando %d/%d : %s\n', i, length(archivos), nombre_hv);
+    fprintf('------------------------------------------------------------\n');
+
+    try
+        datos = leer_HV(nombre_hv, ruta_hv);
+        f0 = datos.f0; A0 = datos.A0; Nw = datos.Nw;
+        f0_windows = datos.f0_windows; sigma_f = datos.sigma_f;
+        frecuencia = datos.frecuencia; HV = datos.HV; HVmin = datos.HVmin; HVmax = datos.HVmax;
+
+        if isnan(f0) || isnan(A0) || isnan(Nw) || isempty(frecuencia)
+            error('Datos basicos incompletos en el archivo .hv.');
+        end
+
+        limite_frecuencia = 10 / LW_SECONDS;
+        C1 = f0 > limite_frecuencia;
+        nc = LW_SECONDS * Nw * f0;
+        C2 = nc > 200;
+
+        [C3, estado_C3, sigmaA_max] = criterio_estabilidad(frecuencia, HV, HVmin, HVmax, f0);
+        curva_confiable = C1 && C2 && C3;
+
+        claridad = false(1,6); claridad_estado = cell(1,6);
+        [claridad(1), claridad_estado{1}] = criterio_existencia(frecuencia, HV, f0/4, f0, A0/2);
+        [claridad(2), claridad_estado{2}] = criterio_existencia(frecuencia, HV, f0, 4*f0, A0/2);
+        claridad(3) = A0 > 2;
+        if claridad(3), claridad_estado{3} = 'PASS'; else claridad_estado{3} = 'FAIL'; end
+        [claridad(4), fpeak_min, fpeak_max] = criterio_fpeak(frecuencia, HVmin, HVmax, f0);
+        if claridad(4), claridad_estado{4} = 'PASS'; else claridad_estado{4} = 'FAIL'; end
+
+        epsilon = obtener_epsilon(f0);
+        if isnan(sigma_f)
+            claridad(5) = false; claridad_estado{5} = 'NO_DATA';
+        else
+            claridad(5) = sigma_f < epsilon;
+            if claridad(5), claridad_estado{5} = 'PASS'; else claridad_estado{5} = 'FAIL'; end
+        end
+
+        [sigmaA_f0, theta] = sigmaA_en_f0(frecuencia, HV, HVmin, HVmax, f0);
+        if isnan(sigmaA_f0)
+            claridad(6) = false; claridad_estado{6} = 'NO_DATA';
+        else
+            claridad(6) = sigmaA_f0 < theta;
+            if claridad(6), claridad_estado{6} = 'PASS'; else claridad_estado{6} = 'FAIL'; end
+        end
+
+        cantidad_claridad = sum(claridad);
+        pico_claro = cantidad_claridad >= 5;
+
+        if curva_confiable && pico_claro
+            veredicto = 'VALIDA';
+        elseif ~curva_confiable && estado_C3 == 0
+            veredicto = 'NO CONCLUYENTE';
+        elseif curva_confiable && ~pico_claro
+            veredicto = 'CURVA CONFIABLE - PICO NO CLARO';
+        else
+            veredicto = 'NO VALIDA';
+        end
+
+        generar_grafico_sesame(frecuencia, HV, HVmin, HVmax, f0, A0, veredicto, cantidad_claridad, nombre_hv, carpeta_graficos);
+
+        fprintf('f0 promedio      : %.5f Hz\nA0                : %.5f\nVEREDICTO: %s\n', f0, A0, veredicto);
+
+        resultados(end+1,:) = {nombre_hv, f0, A0, Nw, LW_SECONDS, nc, C1, C2, C3, cantidad_claridad, ...
+            claridad(1), claridad(2), claridad(3), claridad(4), claridad(5), claridad(6), ...
+            f0_windows, sigma_f, epsilon, sigmaA_f0, theta, sigmaA_max, fpeak_min, fpeak_max, veredicto};
+
+    catch ME
+        fprintf('\nERROR en archivo %s: %s\n', nombre_hv, ME.message);
+        resultados(end+1,:) = {nombre_hv, NaN, NaN, NaN, LW_SECONDS, NaN, false, false, false, 0, ...
+            false, false, false, false, false, false, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, 'ERROR'};
+    end
+end
+
+fid = fopen(archivo_salida, 'w');
+fprintf(fid, ['Estacion;f0_Hz;A0;Nw;lw_s;nc;C1_frecuencia;C2_ciclos;C3_estabilidad;' ...
+     'N_claridad;CL1;CL2;CL3_A0;CL4_fpeak;CL5_sigmaf;CL6_sigmaA;f0_windows;sigma_f;epsilon;sigmaA_f0;theta;sigmaA_max;fpeak_min;fpeak_max;Veredicto\n']);
+for i = 1:size(resultados,1)
+    fprintf(fid, '%s;%.6f;%.6f;%d;%.3f;%.3f;%d;%d;%d;%d;%d;%d;%d;%d;%d;%d;%.6f;%.6f;%.6f;%.6f;%.6f;%.6f;%.6f;%.6f;%s\n', resultados{i,:});
+end
+fclose(fid);
+fprintf('\n============================================================\nPROCESAMIENTO TERMINADO.\n============================================================\n');
+
+end % CIERRE OBLIGATORIO DE LA FUNCION PRINCIPAL EN OCTAVE
+
+
+%% ================================================================
+% FUNCIONES DE SOPORTE SUBORDINADAS
+% ================================================================
+function [resultado, estado, sigma_max] = criterio_estabilidad(f, HV, HVmin, HVmax, f0)
+    resultado = false; estado = 0; sigma_max = NaN; f_inf = 0.5 * f0; f_sup = 2.0 * f0;
+    if min(f) > f_inf || max(f) < f_sup, return; end
+    mascara = f > f_inf & f < f_sup; if sum(mascara) == 0, return; end
+    A = HV(mascara); Amin = HVmin(mascara); Amax = HVmax(mascara);
+    v = isfinite(A) & isfinite(Amin) & isfinite(Amax) & A > 0 & Amin > 0 & Amax > 0; if sum(v) == 0, return; end
+    A = A(v); Amin = Amin(v); Amax = Amax(v); sigmaA = sqrt(Amax ./ Amin); sigma_max = max(sigmaA);
+    limite = 3.0; if f0 > 0.5, limite = 2.0; end
+    if all(sigmaA < limite), resultado = true; estado = 1; else resultado = false; estado = 2; end
+end
+
+function [resultado, estado] = criterio_existencia(f, HV, fmin, fmax, limite)
+    resultado = false; estado = 'FAIL'; mascara = f >= fmin & f <= fmax; if sum(mascara) == 0, estado = 'NO_DATA'; return; end
+    valores = HV(mascara); valores = valores(isfinite(valores)); if isempty(valores), estado = 'NO_DATA'; return; end
+    if any(valores < limite)
+        resultado = true; estado = 'PASS';
+    else
+        if fmin < min(f) || fmax > max(f), estado = 'INCOMPLETE'; end;
+    end
+end
+
+function [resultado, fpeak_min, fpeak_max] = criterio_fpeak(f, HVmin, HVmax, f0)
+    resultado = false; fpeak_min = NaN; fpeak_max = NaN; if isempty(f), return; end
+    [~, imin] = max(HVmin); [~, imax] = max(HVmax); fpeak_min = f(imin); fpeak_max = f(imax);
+    resultado = (abs(fpeak_min - f0) <= 0.05 * f0) && (abs(fpeak_max - f0) <= 0.05 * f0);
+end
+
+function epsilon = obtener_epsilon(f0)
+    if f0 < 0.2, epsilon = 0.25 * f0; elseif f0 < 0.5, epsilon = 0.20 * f0; elseif f0 < 1.0, epsilon = 0.15 * f0; elseif f0 < 2.0, epsilon = 0.10 * f0; else epsilon = 0.05 * f0; end
+end
+
+function [sigmaA, theta] = sigmaA_en_f0(f, HV, HVmin, HVmax, f0)
+    sigmaA = NaN; theta = obtener_theta(f0); if isempty(f), return; end
+    Amin = interp1(f, HVmin, f0, 'linear', NaN); Amax = interp1(f, HVmax, f0, 'linear', NaN);
+    if isnan(Amin) || isnan(Amax) || Amin <= 0 || Amax <= 0, return; end
+    sigmaA = sqrt(Amax / Amin);
+end
+
+function theta = obtener_theta(f0)
+    if f0 < 0.2, theta = 3.0; elseif f0 < 0.5, theta = 2.5; elseif f0 < 1.0, theta = 2.0; elseif f0 < 2.0, theta = 1.78; else theta = 1.58; end
+end
