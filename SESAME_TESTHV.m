@@ -11,7 +11,7 @@ fprintf('\n============================================================\n');
 fprintf('       SESAME - EVALUACION AUTOMATICA + VISUALIZACION\n');
 fprintf('============================================================\n');
 
-carpeta = 'D:\Users\Datos\Datos frecuencia\Datos Procesados';
+% carpeta = 'COLOCAR LA RUTA DE LA CARPETA DE LOS DATOS';
 LW_SECONDS = 50;
 archivo_salida = fullfile(carpeta, 'Resultados_SESAME.csv');
 carpeta_graficos = fullfile(carpeta, 'Graficos_SESAME');
