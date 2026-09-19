@@ -11,7 +11,7 @@ fprintf('\n============================================================\n');
 fprintf('       SESAME - EVALUACION AUTOMATICA + VISUALIZACION\n');
 fprintf('============================================================\n');
 
-% carpeta = 'COLOCAR LA RUTA DE LA CARPETA DE LOS DATOS';
+carpeta = 'D:\Users\Datos\Datos frecuencia\Datos Procesados';
 LW_SECONDS = 50;
 archivo_salida = fullfile(carpeta, 'Resultados_SESAME.csv');
 carpeta_graficos = fullfile(carpeta, 'Graficos_SESAME');
@@ -140,8 +140,27 @@ function [resultado, estado] = criterio_existencia(f, HV, fmin, fmax, limite)
 end
 
 function [resultado, fpeak_min, fpeak_max] = criterio_fpeak(f, HVmin, HVmax, f0)
-    resultado = false; fpeak_min = NaN; fpeak_max = NaN; if isempty(f), return; end
-    [~, imin] = max(HVmin); [~, imax] = max(HVmax); fpeak_min = f(imin); fpeak_max = f(imax);
+    resultado = false; fpeak_min = NaN; fpeak_max = NaN;
+    if isempty(f), return; end
+
+    % Antes: buscaba el maximo en TODO el vector f, lo que agarraba
+    % artefactos de borde en frecuencias muy bajas (ej. f=0.10 Hz).
+    % Ahora: se acota la busqueda a la banda de interes alrededor de f0,
+    % la misma banda que ya usan los criterios 1 y 2.
+    banda = f >= f0/4 & f <= 4*f0;
+    if sum(banda) == 0
+        return; % no hay datos en la banda de interes, no se puede evaluar
+    end
+
+    f_b = f(banda);
+    HVmin_b = HVmin(banda);
+    HVmax_b = HVmax(banda);
+
+    [~, imin] = max(HVmin_b);
+    [~, imax] = max(HVmax_b);
+    fpeak_min = f_b(imin);
+    fpeak_max = f_b(imax);
+
     resultado = (abs(fpeak_min - f0) <= 0.05 * f0) && (abs(fpeak_max - f0) <= 0.05 * f0);
 end
 
