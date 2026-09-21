@@ -1,222 +1,209 @@
-' # HV_TEST_QUALITY_CONTROL
-' HV_TEST_QUALITY_CONTROL
-' [README_SESAME_HVSR.txt](https://github.com/user-attachments/files/32242649/README_SESAME_HVSR.txt)
-' README - AUTOMATIZACION SESAME PARA CURVAS HVSR
-' GNU OCTAVE + ARCHIVOS .HV DE GEOPSY
+================================================================================
+ SESAME_TESTHV.m
+ Evaluacion automatica de criterios de fiabilidad y claridad SESAME (2004)
+ para curvas H/V (HVSR) exportadas desde Geopsy, con deteccion automatica
+ de picos multiples
+================================================================================
 
-' 1. OBJETIVO
-Este programa permite evaluar automaticamente la confiabilidad y claridad de
-picos de curvas H/V (HVSR) obtenidas con Geopsy, siguiendo la logica de los
-criterios SESAME.
+Autor: Franco Villella
+Contexto: Tesis de grado, Licenciatura en Geofisica (UNSJ)
+"Evaluacion del peligro sismico en la ciudad de Salta a partir del analisis
+del terremoto de febrero de 2010 y su contexto sismotectonico"
 
-IMPORTANTE: el programa NO procesa señales sismicas crudas. Trabaja sobre
-archivos .hv que ya fueron procesados y exportados desde Geopsy.
+--------------------------------------------------------------------------------
+1. QUE HACE ESTE SCRIPT
+--------------------------------------------------------------------------------
 
-2. ARCHIVOS PRINCIPALES
-- leer_HV.m: lee cada archivo .hv y extrae Nw, f0, A0, informacion de f0 por
-  ventanas y las curvas Frequency / Average / Min / Max.
-- generar_grafico_sesame.m: genera el grafico de control de cada estacion.
-- script principal: recorre los .hv, aplica los criterios V1-V9 y genera los
-  resultados.
+Automatiza el control de calidad de curvas HVSR (razon espectral horizontal/
+vertical) siguiendo los criterios definidos por el proyecto europeo SESAME
+(Site EffectS assessment using AMbient Excitations, 2004), que son el
+estandar de facto para decidir si una curva H/V y su pico de frecuencia
+fundamental (f0) son estadisticamente confiables.
 
-3. REQUISITO IMPORTANTE: DURACION DE VENTANA
-El archivo .hv no contiene directamente la duracion de la ventana utilizada
-en el procesamiento. Por eso el programa usa un parametro global definido
-en el script principal.
+Toma como entrada archivos .hv exportados desde Geopsy (uno por estacion de
+medicion) y para cada uno:
 
-Para el conjunto de datos original:
+  1. Lee la curva promedio H/V, sus envolventes (HVmin, HVmax) y los
+     metadatos del procesamiento (numero de ventanas, f0 picado, amplitud).
+  2. Detecta automaticamente TODOS los picos (maximos locales) presentes en
+     la curva, no solo el que fue picado manualmente en Geopsy.
+  3. Evalua, para cada pico candidato, los 3 criterios de FIABILIDAD de la
+     curva y los 6 criterios de CLARIDAD del pico segun SESAME.
+  4. Asigna un veredicto final (VALIDA / CURVA CONFIABLE-PICO NO CLARO /
+     NO CONCLUYENTE / NO VALIDA) a cada candidato.
+  5. Genera un grafico PNG por cada curva/candidato evaluado, con las bandas
+     de referencia SESAME superpuestas.
+  6. Exporta todos los resultados a un unico CSV (Resultados_SESAME.csv),
+     con una fila por candidato de pico.
 
-    LW_SECONDS = 50
+--------------------------------------------------------------------------------
+2. POR QUE SE DETECTAN MULTIPLES PICOS POR ESTACION
+--------------------------------------------------------------------------------
 
-Esto significa que las ventanas utilizadas fueron de 50 segundos.
+Un pico H/V representa un contraste de impedancia acustica en profundidad.
+Cuando existe mas de un contraste significativo (por ejemplo, una capa
+superficial rigida sobre sedimentos blandos, y mas abajo el contacto
+sedimento-basamento), la curva puede mostrar mas de un pico genuino:
 
-Si se utilizan archivos generados con otra duracion, hay que cambiar
-LW_SECONDS antes de ejecutar el programa.
+  - El pico de mayor amplitud suele asociarse al contraste mas fuerte,
+    frecuentemente el mas somero.
+  - Un pico de menor amplitud (y menor frecuencia) puede corresponder a un
+    contraste mas profundo, como el contacto sedimento-basamento, que es
+    habitualmente el de mayor interes para estudios de espesor de cuenca y
+    peligro sismico de periodo largo.
 
-No mezclar archivos procesados con distintas duraciones de ventana sin
-revisar este parametro.
+Evaluar unicamente el pico de mayor amplitud puede hacer que se descarte,
+sin analizar, informacion geologica real contenida en picos secundarios.
+Por eso el script identifica todos los maximos locales relevantes de la
+curva y corre el control de calidad SESAME sobre cada uno por separado.
 
-4. PREPARACION
-Se recomienda una estructura como:
+--------------------------------------------------------------------------------
+3. LOS 3 CRITERIOS DE FIABILIDAD DE LA CURVA (C1, C2, C3)
+--------------------------------------------------------------------------------
 
-PROYECTO/
-  script_principal.m
+Determinan si la curva en su conjunto es estadisticamente confiable,
+independientemente de que tan marcado sea el pico.
+
+  C1 (frecuencia minima resoluble):
+      f0 > 10 / Lw
+      donde Lw es la longitud de la ventana de analisis (segundos).
+      Garantiza que la ventana sea lo bastante larga para resolver la
+      frecuencia f0 con precision espectral suficiente.
+
+  C2 (numero de ciclos):
+      nc = Lw * Nw * f0 > 200
+      donde Nw es el numero de ventanas utilizadas. Garantiza que se
+      promediaron suficientes ciclos de la senal en la frecuencia f0.
+
+  C3 (estabilidad de amplitud en la banda [0.5*f0, 2*f0]):
+      sigmaA(f) = sqrt(HVmax(f) / HVmin(f)) < limite
+      con limite = 2.0 si f0 > 0.5 Hz, o 3.0 si f0 <= 0.5 Hz, para todas
+      las frecuencias dentro de la banda. Ademas requiere que el archivo
+      .hv cubra efectivamente esa banda completa (si el rango de frecuencias
+      exportado desde Geopsy no llega a 2*f0, este criterio no puede
+      evaluarse y el resultado se marca como "no concluyente").
+
+La curva se considera "confiable" (curva_confiable) solo si se cumplen
+los 3 criterios simultaneamente.
+
+--------------------------------------------------------------------------------
+4. LOS 6 CRITERIOS DE CLARIDAD DEL PICO (CL1 a CL6)
+--------------------------------------------------------------------------------
+
+Determinan si el pico en f0 esta bien definido (y no es, por ejemplo, una
+meseta ancha o un maximo ambiguo). Se requieren al menos 5 de 6 para
+considerar el pico "claro".
+
+  CL1: existe una frecuencia f- en [f0/4, f0] tal que HV(f-) < A0/2.
+  CL2: existe una frecuencia f+ en [f0, 4*f0] tal que HV(f+) < A0/2.
+       (Ambos verifican que el pico realmente decae hacia los flancos,
+        y no es parte de una meseta ancha.)
+  CL3: A0 > 2 (amplitud minima del pico).
+  CL4: el maximo de las curvas HVmin y HVmax, buscado dentro de la banda
+       [f0/4, 4*f0], cae dentro de un 5% de f0. Verifica que el pico sea
+       consistente entre las envolventes de variabilidad, y no solo en la
+       curva promedio.
+  CL5: la desviacion estandar de f0 entre ventanas individuales (sigma_f)
+       es menor que un umbral epsilon(f0) (mas estricto cuanto mayor es f0).
+       Esto solo puede evaluarse para el pico que fue picado manualmente en
+       Geopsy, porque es el unico para el cual el archivo .hv reporta la
+       linea "# f0 from windows" con la dispersion entre ventanas. Para
+       picos detectados automaticamente por este script (candidatos
+       secundarios), CL5 no es evaluable y se excluye del conteo en vez de
+       contarse como fallido.
+  CL6: la dispersion de amplitud en f0 (sigmaA_f0 = sqrt(HVmax(f0)/HVmin(f0)))
+       es menor que un umbral theta(f0).
+
+Como CL5 no siempre es evaluable, el script calcula ademas un puntaje
+normalizado (N_claridad / Criterios_evaluables) y usa un umbral equivalente
+(>= 5/6 cuando CL5 aplica, >= 4/5 cuando no aplica) para no penalizar a los
+picos secundarios por una limitacion de exportacion de Geopsy y no por una
+falla real de la curva.
+
+--------------------------------------------------------------------------------
+5. VEREDICTO FINAL
+--------------------------------------------------------------------------------
+
+  VALIDA                            -> curva confiable Y pico claro
+  CURVA CONFIABLE - PICO NO CLARO   -> curva confiable, pico no claro
+  NO CONCLUYENTE                    -> curva no confiable por rango de
+                                        frecuencias insuficiente (no se
+                                        pudo evaluar C3)
+  NO VALIDA                         -> curva no confiable por otro motivo
+                                        (inestabilidad real, no de rango)
+
+--------------------------------------------------------------------------------
+6. ARCHIVOS DEL PROYECTO
+--------------------------------------------------------------------------------
+
+  SESAME_TESTHV.m
+      Script principal. Recorre todos los archivos .hv de una carpeta,
+      llama a leer_HV.m para parsear cada uno, detecta picos candidatos,
+      evalua los criterios SESAME sobre cada candidato, genera los graficos
+      via generar_grafico_sesame.m y exporta Resultados_SESAME.csv.
+
   leer_HV.m
+      Parsea un archivo .hv de Geopsy. Extrae: numero de ventanas (Nw),
+      f0 promedio, f0 y su dispersion entre ventanas (f0_windows, sigma_f),
+      amplitud del pico (A0), y las curvas de frecuencia/HV/HVmin/HVmax.
+
   generar_grafico_sesame.m
-  INPUT/
-      ESTACION_01.hv
-      ESTACION_02.hv
-      ESTACION_03.hv
-      ...
-  OUTPUT/
+      Genera y guarda un grafico PNG de la curva H/V con las bandas de
+      referencia SESAME (0.5*f0 y 2*f0), el pico marcado, y el veredicto
+      y puntaje de claridad en el titulo.
 
-Coloque los .m en la carpeta del proyecto y los archivos .hv en la carpeta
-de entrada definida por el script principal.
+  Resultados_SESAME.csv (salida)
+      Una fila por cada pico candidato evaluado en cada estacion. Columnas
+      principales: Estacion, Es_Principal (1 si es el pico picado
+      manualmente en Geopsy, 0 si fue detectado automaticamente), f0_Hz,
+      A0, C1/C2/C3, CL1 a CL6, N_claridad, Criterios_evaluables,
+      N_claridad_norm, Veredicto.
 
-5. FORMATO ESPERADO DEL .HV
-Los archivos deben contener informacion equivalente a:
+--------------------------------------------------------------------------------
+7. PARAMETROS AJUSTABLES
+--------------------------------------------------------------------------------
 
-# Number of windows = ...
-# f0 from average ...
-# f0 from windows ...
-# f0 amplitude ...
-...
-# Frequency Average Min Max
+  LW_SECONDS (en SESAME_TESTHV.m)
+      Longitud de ventana usada en el procesamiento Geopsy (segundos).
+      Debe coincidir con la usada al generar los .hv, ya que se usa para
+      evaluar C1 y C2.
 
-seguida por los datos de frecuencia y amplitud.
+  MIN_AMPLITUD, MIN_PROMINENCIA, MIN_SEPARACION_OCT (funcion detectar_picos)
+      Controlan la sensibilidad de la deteccion automatica de picos:
+      amplitud minima para considerar un maximo local como candidato,
+      prominencia minima relativa al valle mas cercano, y separacion
+      minima entre dos candidatos (en octavas) para no duplicar el mismo
+      pico. Se recomienda ajustarlos revisando visualmente los graficos
+      generados en una primera corrida de prueba.
 
-6. COMO EJECUTAR
-1) Abra GNU Octave.
-2) Cambie a la carpeta del proyecto, por ejemplo:
-       cd 'C:\ruta\del\proyecto'
-3) Compruebe que LW_SECONDS tenga el valor correcto.
-4) Ejecute el script principal, por ejemplo:
-       run('script_principal.m')
+--------------------------------------------------------------------------------
+8. LIMITACIONES CONOCIDAS
+--------------------------------------------------------------------------------
 
-El nombre del script principal puede variar.
+  - CL5 no es evaluable para picos detectados automaticamente (ver seccion 4).
+  - El criterio C3 (y por lo tanto el veredicto NO CONCLUYENTE) depende del
+    rango de frecuencias exportado desde Geopsy. Si el pico de interes tiene
+    f0 alto, el archivo .hv debe exportarse con un techo de frecuencia de al
+    menos 2*f0 (idealmente 4*f0) para poder evaluar la curva por completo.
+  - La deteccion automatica de picos puede requerir ajuste de parametros
+    segun el nivel de ruido de cada dataset; se recomienda inspeccionar los
+    graficos PNG generados antes de dar por buena una corrida masiva.
 
-7. QUE HACE EL PROGRAMA
-Para cada archivo .hv:
-- lee automaticamente f0, A0, Nw y las curvas H/V;
-- utiliza LW_SECONDS;
-- calcula el numero de ciclos:
-      nc = lw * Nw * f0
-- evalua los nueve criterios SESAME V1-V9;
-- cuenta los criterios de claridad satisfactorios;
-- genera un resultado por estacion;
-- genera un grafico de control;
-- guarda los resultados en una tabla/CSV, segun la configuracion del script.
+--------------------------------------------------------------------------------
+9. REQUISITOS
+--------------------------------------------------------------------------------
 
-8. CRITERIOS SESAME
-CONFIABILIDAD:
-- V1: comprueba f0 > 10/lw.
-- V2: comprueba nc > 200.
-- V3: evalua la estabilidad de la amplitud en la banda 0.5*f0 a 2*f0.
+  - GNU Octave (probado con el toolkit grafico 'gnuplot').
+  - Archivos .hv exportados desde Geopsy (formato estandar, con encabezados
+    "# Number of windows =", "# f0 from average", "# f0 from windows",
+    "# f0 amplitude", y columnas Frecuencia/Promedio/Min/Max).
 
-CLARIDAD DEL PICO:
-- V4: busca una caida por debajo de A0/2 entre f0/4 y f0.
-- V5: busca una caida por debajo de A0/2 entre f0 y 4*f0.
-- V6: comprueba A0 > 2.
-- V7: comprueba la posicion de los maximos de las curvas Min y Max dentro
-  de aproximadamente +/-5 % de f0.
-- V8: comprueba la estabilidad de la frecuencia del pico.
-- V9: comprueba la estabilidad de la amplitud del pico.
+--------------------------------------------------------------------------------
+10. REFERENCIA
+--------------------------------------------------------------------------------
 
-9. PASS / FAIL / INCOMPLETO
-PASS:
-El criterio pudo evaluarse completamente y cumple el requisito.
-
-FAIL:
-El criterio pudo evaluarse completamente pero NO cumple el requisito.
-
-INCOMPLETO:
-No existe informacion suficiente en el .hv para evaluar todo el intervalo
-requerido.
-
-INCOMPLETO NO significa FAIL.
-
-Ejemplo importante:
-Si 2*f0 queda fuera del rango de frecuencias disponible del archivo .hv,
-V3 no puede evaluarse completamente y debe quedar como INCOMPLETO.
-
-Lo mismo aplica cuando las bandas necesarias para V4 o V5 no estan cubiertas.
-
-10. RESULTADOS
-El resultado tabular puede incluir, por estacion:
-- nombre del archivo;
-- f0;
-- A0;
-- Nw;
-- lw;
-- nc;
-- V1 a V9;
-- numero de criterios de claridad aprobados;
-- veredicto general.
-
-El grafico de control muestra:
-- H/V promedio;
-- H/V Min;
-- H/V Max;
-- lineas de referencia 0.5*f0 y 2*f0;
-- ubicacion de f0 y A0;
-- veredicto;
-- cantidad de criterios de claridad aprobados.
-
-Los graficos se guardan con nombres del tipo:
-    ESTACION_SESAME.png
-Por ejemplo:
-    SB_1_SESAME.png
-
-11. CONTROL DE CALIDAD
-Aunque la evaluacion es automatica, se recomienda revisar visualmente:
-- estaciones con FAIL;
-- estaciones con INCOMPLETO;
-- posicion de f0;
-- forma de la curva H/V;
-- amplitud A0;
-- que LW_SECONDS coincida con el procesamiento original;
-- que los archivos pertenezcan a una configuracion homogenea.
-
-12. PROBLEMAS FRECUENTES
-
-"No se pudo abrir el archivo"
-Verifique ruta, nombre y permisos.
-
-"No aparecen f0, A0 o Nw"
-Revise que el .hv tenga las lineas de cabecera esperadas.
-
-"V3 aparece como INCOMPLETO"
-Compruebe si la curva llega hasta 2*f0. Si no llega, falta informacion.
-
-"Los resultados parecen incorrectos"
-Revise principalmente LW_SECONDS y las rutas de entrada/salida.
-
-13. LIMITACIONES
-Este programa automatiza criterios numericos sobre curvas H/V. No reemplaza
-la revision de la calidad de la señal, la seleccion de ventanas, el analisis
-de ruido, la interpretacion geofisica ni el criterio profesional del analista.
-
-Un PASS indica cumplimiento de los criterios evaluados; no significa por si
-solo que la interpretacion geofisica sea correcta en todos los casos.
-
-14. FLUJO GENERAL
-
-GEOPSY
-  |
-  v
-Archivos .HV
-  |
-  v
-leer_HV.m
-  |
-  v
-Extraccion de f0, A0, Nw y curvas
-  |
-  v
-Evaluacion V1-V9
-  |
-  +----------------------+
-  |                      |
-  v                      v
-CSV / tabla          Graficos PNG
-  |                      |
-  +----------+-----------+
-             v
-       Revision del analista
-             |
-             v
-      Interpretacion final
-
-15. LISTA DE COMPROBACION ANTES DE USAR
-[ ] GNU Octave instalado y funcionando.
-[ ] Archivos .m disponibles.
-[ ] Archivos .hv validos.
-[ ] LW_SECONDS correcto.
-[ ] Ruta de entrada correcta.
-[ ] Ruta de salida correcta.
-[ ] Se revisaron resultados INCOMPLETO.
-[ ] Se revisaron resultados FAIL.
-[ ] Se conservaron los archivos de salida.
-
-El objetivo del programa es facilitar un analisis SESAME rapido, consistente,
-reproducible y trazable sobre un conjunto grande de curvas HVSR.
+SESAME European Research Project (2004). "Guidelines for the implementation
+of the H/V spectral ratio technique on ambient vibrations - Measurements,
+processing and interpretation." SESAME European Research Project WP12,
+Deliverable D23.12.
+================================================================================
